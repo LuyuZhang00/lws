@@ -536,3 +536,157 @@ func TestSetCondition(t *testing.T) {
 		})
 	}
 }
+
+func TestRollingUpdateParametersWithMaxSurge(t *testing.T) {
+	tests := []struct {
+		name                   string
+		lws                    *leaderworkerset.LeaderWorkerSet
+		sts                    *appsv1.StatefulSet
+		leaderWorkerSetUpdated bool
+		revisionKey            string
+		expectedPartition      int32
+		expectedReplicas       int32
+	}{
+		{
+			name: "Initial deployment with maxSurge should not apply surge",
+			lws: wrappers.BuildBasicLeaderWorkerSet("test-lws", "default").
+				Replica(6).
+				RolloutStrategy(leaderworkerset.RolloutStrategy{
+					Type: leaderworkerset.RollingUpdateStrategyType,
+					RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+						Partition:      ptr.To[int32](0),
+						MaxUnavailable: intstr.FromInt32(2),
+						MaxSurge:       intstr.FromInt32(3),
+					},
+				}).
+				WorkerTemplateSpec(wrappers.MakeWorkerPodSpec()).
+				Size(2).
+				Obj(),
+			sts:                    nil,
+			leaderWorkerSetUpdated: false,
+			revisionKey:            "test-revision",
+			expectedPartition:      0,
+			expectedReplicas:       6, // Should be 6, not 9
+		},
+		{
+			name: "Initial deployment with high partition value (user's scenario) - partition ignored",
+			lws: wrappers.BuildBasicLeaderWorkerSet("test-lws", "default").
+				Replica(6).
+				RolloutStrategy(leaderworkerset.RolloutStrategy{
+					Type: leaderworkerset.RollingUpdateStrategyType,
+					RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+						Partition:      ptr.To[int32](9),
+						MaxUnavailable: intstr.FromInt32(2),
+						MaxSurge:       intstr.FromInt32(3),
+					},
+				}).
+				WorkerTemplateSpec(wrappers.MakeWorkerPodSpec()).
+				Size(2).
+				Obj(),
+			sts:                    nil,
+			leaderWorkerSetUpdated: false,
+			revisionKey:            "test-revision",
+			expectedPartition:      0, // Partition is ignored during initial deployment
+			expectedReplicas:       6, // Should be 6, not 9
+		},
+		{
+			name: "Initial deployment with existing empty StatefulSet - partition ignored",
+			lws: wrappers.BuildBasicLeaderWorkerSet("test-lws", "default").
+				Replica(6).
+				RolloutStrategy(leaderworkerset.RolloutStrategy{
+					Type: leaderworkerset.RollingUpdateStrategyType,
+					RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+						Partition:      ptr.To[int32](3), // This will be ignored
+						MaxUnavailable: intstr.FromInt32(2),
+						MaxSurge:       intstr.FromInt32(3),
+					},
+				}).
+				WorkerTemplateSpec(wrappers.MakeWorkerPodSpec()).
+				Size(2).
+				Obj(),
+			sts: &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-lws",
+					Namespace:   "default",
+					Annotations: map[string]string{
+						"leaderworkerset.sigs.k8s.io/replicas": "6",
+					},
+				},
+				Spec: appsv1.StatefulSetSpec{
+					Replicas: ptr.To[int32](0), // Empty StatefulSet
+					UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
+						Type: appsv1.RollingUpdateStatefulSetStrategyType,
+						RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{
+							Partition: ptr.To[int32](0),
+						},
+					},
+				},
+			},
+			leaderWorkerSetUpdated: true,
+			revisionKey:            "test-revision",
+			expectedPartition:      0, // Partition ignored for initial deployment
+			expectedReplicas:       6, // Should be 6, not 9
+		},
+		{
+			name: "Rolling update with non-zero replicas should respect partition",
+			lws: wrappers.BuildBasicLeaderWorkerSet("test-lws", "default").
+				Replica(6).
+				RolloutStrategy(leaderworkerset.RolloutStrategy{
+					Type: leaderworkerset.RollingUpdateStrategyType,
+					RollingUpdateConfiguration: &leaderworkerset.RollingUpdateConfiguration{
+						Partition:      ptr.To[int32](0),
+						MaxUnavailable: intstr.FromInt32(2),
+						MaxSurge:       intstr.FromInt32(3),
+					},
+				}).
+				WorkerTemplateSpec(wrappers.MakeWorkerPodSpec()).
+				Size(2).
+				Obj(),
+			sts: &appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "test-lws",
+					Namespace:   "default",
+					Annotations: map[string]string{
+						"leaderworkerset.sigs.k8s.io/replicas": "6",
+					},
+				},
+				Spec: appsv1.StatefulSetSpec{
+					Replicas: ptr.To[int32](6), // Non-zero replicas
+					UpdateStrategy: appsv1.StatefulSetUpdateStrategy{
+						Type: appsv1.RollingUpdateStatefulSetStrategyType,
+						RollingUpdate: &appsv1.RollingUpdateStatefulSetStrategy{
+							Partition: ptr.To[int32](3),
+						},
+					},
+				},
+			},
+			leaderWorkerSetUpdated: true,
+			revisionKey:            "test-revision",
+			expectedPartition:      6, // min(6, 6) = 6, respects partition during rolling update
+			expectedReplicas:       9, // Should be 9 during rolling update (applies maxSurge)
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.TODO()
+			client := fake.NewClientBuilder().Build()
+			reconciler := &LeaderWorkerSetReconciler{
+				Client: client,
+			}
+
+			partition, replicas, err := reconciler.rollingUpdateParameters(ctx, tc.lws, tc.sts, tc.revisionKey, tc.leaderWorkerSetUpdated)
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+
+			if partition != tc.expectedPartition {
+				t.Errorf("Expected partition %d, got %d", tc.expectedPartition, partition)
+			}
+
+			if replicas != tc.expectedReplicas {
+				t.Errorf("Expected replicas %d, got %d", tc.expectedReplicas, replicas)
+			}
+		})
+	}
+}

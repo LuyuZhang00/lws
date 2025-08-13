@@ -94,8 +94,29 @@ var _ webhook.CustomValidator = &LeaderWorkerSetWebhook{}
 
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (r *LeaderWorkerSetWebhook) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+	lws := obj.(*v1.LeaderWorkerSet)
+	warnings := admission.Warnings{}
+	
+	// Warn if partition is set during initial creation
+	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil &&
+		lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition != nil &&
+		*lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition > 0 {
+		partition := *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition
+		replicas := *lws.Spec.Replicas
+		
+		if partition > replicas {
+			warnings = append(warnings, 
+				fmt.Sprintf("partition value %d is greater than replicas %d. It will be ignored during initial deployment and all %d replicas will be created. Consider setting partition between 0 and %d.",
+					partition, replicas, replicas, replicas))
+		} else {
+			warnings = append(warnings, 
+				fmt.Sprintf("partition value %d will be ignored during initial deployment. All %d replicas will be created. Partition only takes effect during rolling updates.",
+					partition, replicas))
+		}
+	}
+	
 	allErrs := r.generalValidate(obj)
-	return nil, allErrs.ToAggregate()
+	return warnings, allErrs.ToAggregate()
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
@@ -151,6 +172,17 @@ func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.Error
 		allErrs = append(allErrs, validatePositiveIntOrPercent(maxUnavailable, maxUnavailablePath)...)
 		// This is aligned with Statefulset.
 		allErrs = append(allErrs, isNotMoreThan100Percent(maxUnavailable, maxUnavailablePath)...)
+		
+		// Validate partition value
+		partition := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition
+		partitionPath := specPath.Child("rolloutStrategy", "rollingUpdateConfiguration", "partition")
+		if partition != nil {
+			if *partition < 0 {
+				allErrs = append(allErrs, field.Invalid(partitionPath, *partition, "partition must be greater than or equal to 0"))
+			}
+			// Note: partition > replicas is handled as a warning in ValidateCreate, not an error here
+			// This allows users to create the resource, though partition will be ignored during initial deployment
+		}
 	}
 
 	maxSurge := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge
