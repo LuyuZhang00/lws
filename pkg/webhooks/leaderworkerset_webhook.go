@@ -97,21 +97,30 @@ func (r *LeaderWorkerSetWebhook) ValidateCreate(ctx context.Context, obj runtime
 	lws := obj.(*v1.LeaderWorkerSet)
 	warnings := admission.Warnings{}
 	
-	// Warn if partition is set during initial creation
-	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil &&
-		lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition != nil &&
-		*lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition > 0 {
-		partition := *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition
+	// Warn if partition or maxSurge is set during initial creation
+	// The controller will ignore these values during initial deployment
+	if lws.Spec.RolloutStrategy.RollingUpdateConfiguration != nil {
+		partition := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition
+		maxSurge := lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge
 		replicas := *lws.Spec.Replicas
 		
-		if partition > replicas {
-			warnings = append(warnings, 
-				fmt.Sprintf("partition value %d is greater than replicas %d. It will be ignored during initial deployment and all %d replicas will be created. Consider setting partition between 0 and %d.",
-					partition, replicas, replicas, replicas))
-		} else {
-			warnings = append(warnings, 
-				fmt.Sprintf("partition value %d will be ignored during initial deployment. All %d replicas will be created. Partition only takes effect during rolling updates.",
-					partition, replicas))
+		if partition != nil && *partition > 0 {
+			if *partition > replicas {
+				warnings = append(warnings, 
+					fmt.Sprintf("partition value %d is greater than replicas %d and will be ignored during initial deployment. All %d replicas will be created with partition=0.",
+						*partition, replicas, replicas))
+			} else {
+				warnings = append(warnings, 
+					fmt.Sprintf("partition value %d will be ignored during initial deployment. All %d replicas will be created with partition=0. Partition only takes effect during rolling updates.",
+						*partition, replicas))
+			}
+		}
+		
+		maxSurgeVal, _ := intstr.GetScaledValueFromIntOrPercent(&maxSurge, int(replicas), true)
+		if maxSurgeVal > 0 {
+			warnings = append(warnings,
+				fmt.Sprintf("maxSurge value %v will be ignored during initial deployment. Only %d replicas will be created. MaxSurge only takes effect during rolling updates.",
+					maxSurge.String(), replicas))
 		}
 	}
 	

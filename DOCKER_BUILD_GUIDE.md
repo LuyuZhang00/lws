@@ -18,7 +18,7 @@ kubectl version --client
 ## 构建镜像
 
 ### 方法 1: 使用 Makefile（推荐）
-
+us-central1-docker.pkg.dev
 #### 1.1 构建单平台镜像（快速）
 
 ```bash

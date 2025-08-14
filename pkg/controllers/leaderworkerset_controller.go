@@ -256,20 +256,42 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 	ctx = ctrl.LoggerInto(ctx, log)
 	lwsReplicas := *lws.Spec.Replicas
 
-	defer func() {
-		// Limit the replicas with less than lwsPartition will not be updated.
-		// IMPORTANT: For initial deployment (when sts is nil or has 0 replicas), 
-		// we ignore the user-specified partition value and use 0 to ensure all pods are created.
-		// Partition only makes sense during rolling updates, not initial creation.
-		if sts != nil && *sts.Spec.Replicas > 0 {
-			stsPartition = max(stsPartition, *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition)
+	// Helper function to determine if this is an initial deployment
+	isInitialDeployment := func() bool {
+		// No StatefulSet yet
+		if sts == nil {
+			return true
 		}
+		// StatefulSet exists but has no replicas yet
+		if *sts.Spec.Replicas == 0 {
+			return true
+		}
+		// Check if all pods are being created for the first time
+		// If partition >= replicas and replicas > 0, it's likely initial deployment with wrong partition
+		if sts.Spec.UpdateStrategy.RollingUpdate != nil && 
+			sts.Spec.UpdateStrategy.RollingUpdate.Partition != nil &&
+			*sts.Spec.UpdateStrategy.RollingUpdate.Partition >= *sts.Spec.Replicas &&
+			*sts.Spec.Replicas == lwsReplicas {
+			return true
+		}
+		return false
+	}
+
+	defer func() {
+		// For initial deployment, always use partition=0 regardless of user setting
+		if isInitialDeployment() {
+			stsPartition = 0
+			log.V(2).Info("Initial deployment detected, forcing partition to 0", 
+				"userPartition", *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition)
+			return
+		}
+		// For rolling updates, respect user's partition setting
+		stsPartition = max(stsPartition, *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition)
 	}()
 
 	// Case 1:
 	// If sts not created yet, all partitions should be updated,
-	// replicas should not change.
-	// NOTE: We explicitly return partition=0 for initial deployment, ignoring user-specified partition.
+	// replicas should not change, no maxSurge applied.
 	if sts == nil {
 		return 0, lwsReplicas, nil
 	}
@@ -301,12 +323,12 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 	// Case 2:
 	// Indicates a new rolling update here.
 	if leaderWorkerSetUpdated {
-		// Processing scaling up/down first prior to rolling update.
-		// For initial deployment, we should not apply maxSurge and should ignore partition.
-		// Initial deployment is when StatefulSet replicas is 0 (just created)
-		isInitialDeployment := stsReplicas == 0
-		if isInitialDeployment {
+		// Check if this is initial deployment using the helper function
+		if isInitialDeployment() {
 			// Initial deployment: ignore partition (use 0) and don't apply maxSurge
+			// Always return lwsReplicas without surge
+			log.V(2).Info("Initial deployment in Case 2, not applying maxSurge", 
+				"replicas", lwsReplicas, "maxSurge", maxSurge)
 			return 0, lwsReplicas, nil
 		}
 		// For actual rolling updates, respect partition and apply maxSurge if needed
