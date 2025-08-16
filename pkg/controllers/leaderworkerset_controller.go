@@ -109,6 +109,7 @@ func (r *LeaderWorkerSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	ctx = ctrl.LoggerInto(ctx, log)
 
 	leaderSts, err := r.getLeaderStatefulSet(ctx, lws)
+	log.Info("getLeaderStatefulSet return", "leaderSts", leaderSts, "err", err)
 	if err != nil {
 		log.Error(err, "Fetching leader statefulset")
 		return ctrl.Result{}, err
@@ -122,6 +123,7 @@ func (r *LeaderWorkerSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		log.Error(err, "Creating controller revision")
 		return ctrl.Result{}, err
 	}
+	log.Info("Retrieved or created revision", "revision", revision)
 
 	updatedRevision, err := r.getUpdatedRevision(ctx, leaderSts, lws, revision)
 	if err != nil {
@@ -129,6 +131,8 @@ func (r *LeaderWorkerSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	lwsUpdated := updatedRevision != nil
+	log.Info("LWS update status", "lwsUpdated", lwsUpdated)
+
 	if lwsUpdated {
 		revision, err = revisionutils.CreateRevision(ctx, r.Client, updatedRevision)
 		if err != nil {
@@ -138,7 +142,9 @@ func (r *LeaderWorkerSetReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		r.Record.Eventf(lws, corev1.EventTypeNormal, CreatingRevision, fmt.Sprintf("Creating revision with key %s for updated LWS", revisionutils.GetRevisionKey(revision)))
 	}
 
+	log.Info("Calling rollingUpdateParameters", "revisionKey", revisionutils.GetRevisionKey(revision), "lwsUpdated", lwsUpdated)
 	partition, replicas, err := r.rollingUpdateParameters(ctx, lws, leaderSts, revisionutils.GetRevisionKey(revision), lwsUpdated)
+	log.Info("Rolling update parameters", "partition", partition, "replicas", replicas)
 	if err != nil {
 		log.Error(err, "Rolling partition error")
 		return ctrl.Result{}, err
@@ -254,20 +260,56 @@ func SetupIndexes(indexer client.FieldIndexer) error {
 func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context, lws *leaderworkerset.LeaderWorkerSet, sts *appsv1.StatefulSet, revisionKey string, leaderWorkerSetUpdated bool) (stsPartition int32, replicas int32, err error) {
 	log := ctrl.LoggerFrom(ctx).WithValues("leaderworkerset", klog.KObj(lws))
 	ctx = ctrl.LoggerInto(ctx, log)
+	log.Info("Entering rollingUpdateParameters", "revisionKey", revisionKey, "leaderWorkerSetUpdated", leaderWorkerSetUpdated, "stsExists", sts != nil)
+
 	lwsReplicas := *lws.Spec.Replicas
 
-	defer func() {
-		// Limit the replicas with less than lwsPartition will not be updated.
-		stsPartition = max(stsPartition, *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition)
-	}()
+	// defer func() {
+	// 	// Limit the replicas with less than lwsPartition will not be updated.
+	// 	stsPartition = max(stsPartition, *lws.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition)
+	// }()
 
 	// Case 1:
 	// If sts not created yet, all partitions should be updated,
 	// replicas should not change.
 	if sts == nil {
+		// maxSurge is not defined yet, but we know it's ignored for first creation
+		log.Info("Case 1: First creation of StatefulSet", "replicas", lwsReplicas, "note", "maxSurge is ignored for first creation")
 		return 0, lwsReplicas, nil
 	}
 
+	// Case 1b: Check if this is a true first creation by examining Status fields
+	// This handles the case where sts exists but no pods have been created yet
+	isTrueFirstCreation := sts.Status.Replicas == 0 && sts.Status.ReadyReplicas == 0
+	if isTrueFirstCreation {
+		log.Info("Case 1b: True first creation detected via status",
+			"stsStatusReplicas", sts.Status.Replicas,
+			"stsStatusReadyReplicas", sts.Status.ReadyReplicas,
+			"specReplicas", *sts.Spec.Replicas,
+			"targetReplicas", lwsReplicas,
+			"note", "maxSurge is ignored for true first creation")
+		return 0, lwsReplicas, nil
+	}
+
+	// Case 1c: Fallback check using annotation for first creation
+	// This is used when Status fields are not reliable (e.g., after initial creation)
+	_, hasOriginal := sts.Annotations[leaderworkerset.ReplicasAnnotationKey]
+	if !hasOriginal {
+		log.Info("Case 1c: Annotation-based first creation detection",
+			"hasOriginalAnnotation", hasOriginal,
+			"targetReplicas", lwsReplicas,
+			"note", "maxSurge is ignored when original replicas annotation is missing")
+		return 0, lwsReplicas, nil
+	}
+
+	// Log StatefulSet details for debugging
+	log.Info("StatefulSet exists - processing as rolling update",
+		"stsReplicas", *sts.Spec.Replicas,
+		"stsPartition", *sts.Spec.UpdateStrategy.RollingUpdate.Partition,
+		"stsAnnotations", sts.Annotations,
+		"hasOriginalAnnotation", hasOriginal)
+
+	// 当前代码中 currentStsReplicas 未定义，根据上下文推测应使用 sts.Spec.Replicas 的值
 	stsReplicas := *sts.Spec.Replicas
 	maxSurge, err := intstr.GetScaledValueFromIntOrPercent(&lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxSurge, int(lwsReplicas), true)
 	if err != nil {
@@ -278,23 +320,29 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 		maxSurge = int(lwsReplicas)
 	}
 	burstReplicas := lwsReplicas + int32(maxSurge)
+	// Log maxSurge value after it's defined
+	log.Info("Rolling update parameters", "maxSurge", maxSurge, "burstReplicas", burstReplicas)
 
 	// wantReplicas calculates the final replicas if needed.
 	wantReplicas := func(unreadyReplicas int32) int32 {
+		log.Info("wantReplicas calculation", "unreadyReplicas", unreadyReplicas, "maxSurge", maxSurge, "lwsReplicas", lwsReplicas)
 		if unreadyReplicas <= int32(maxSurge) {
 			// When we have n unready replicas and n bursted replicas, we should
 			// start to release the burst replica gradually for the accommodation of
 			// the unready ones.
 			finalReplicas := lwsReplicas + utils.NonZeroValue(int32(unreadyReplicas)-1)
+			log.Info("Reclaiming surge replicas", "finalReplicas", finalReplicas, "burstReplicas", burstReplicas)
 			r.Record.Eventf(lws, corev1.EventTypeNormal, GroupsProgressing, fmt.Sprintf("deleting surge replica %s-%d", lws.Name, finalReplicas))
 			return finalReplicas
 		}
+		log.Info("Using burst replicas", "burstReplicas", burstReplicas)
 		return burstReplicas
 	}
 
 	// Case 2:
 	// Indicates a new rolling update here.
 	if leaderWorkerSetUpdated {
+		log.Info("Case 2: New rolling update triggered", "leaderWorkerSetUpdated", leaderWorkerSetUpdated, "maxSurge", maxSurge, "lwsReplicas", lwsReplicas, "stsReplicas", stsReplicas)
 		// Processing scaling up/down first prior to rolling update.
 		return min(lwsReplicas, stsReplicas), wantReplicas(lwsReplicas), nil
 	}
@@ -304,6 +352,7 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 	// Case 3:
 	// In normal cases, return the values directly.
 	if rollingUpdateCompleted {
+		log.Info("Case 3: Rolling update completed", "partition", partition, "replicas", replicas)
 		return 0, lwsReplicas, nil
 	}
 
@@ -321,11 +370,13 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 	// Case 4:
 	// Replicas changed during rolling update.
 	if replicasUpdated {
+		log.Info("Case 4: Replicas changed during rolling update", "originalLwsReplicas", originalLwsReplicas, "lwsReplicas", lwsReplicas, "replicasUpdated", replicasUpdated)
 		return min(partition, burstReplicas), wantReplicas(lwsUnreadyReplicas), nil
 	}
 
 	// Case 5:
 	// Calculating the Partition during rolling update, no leaderWorkerSet updates happens.
+	log.Info("Case 5: Calculating partition during rolling update", "currentPartition", partition, "maxSurge", maxSurge)
 
 	rollingStep, err := intstr.GetScaledValueFromIntOrPercent(&lws.Spec.RolloutStrategy.RollingUpdateConfiguration.MaxUnavailable, int(lwsReplicas), false)
 	if err != nil {
@@ -335,6 +386,8 @@ func (r *LeaderWorkerSetReconciler) rollingUpdateParameters(ctx context.Context,
 	// we'll violate it when reclaiming bursted replicas.
 	rollingStep += maxSurge - (int(burstReplicas) - int(stsReplicas))
 
+	//打印后面return的参数
+	log.Info("rollingUpdatePartition return", "rollingStep", int32(rollingStep), "partition", partition, "replicas", replicas)
 	return rollingUpdatePartition(states, stsReplicas, int32(rollingStep), partition), wantReplicas(lwsUnreadyReplicas), nil
 }
 

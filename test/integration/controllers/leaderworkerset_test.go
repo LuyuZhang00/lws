@@ -1168,6 +1168,64 @@ var _ = ginkgo.Describe("LeaderWorkerSet controller", func() {
 				},
 			},
 		}),
+		ginkgo.Entry("maxSurge is ignored for true first creation", &testCase{
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).MaxSurge(2)
+			},
+			updates: []*update{
+				{
+					// Initially, no StatefulSet exists, so maxSurge should be ignored
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 2)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+					},
+				},
+			},
+		}),
+		ginkgo.Entry("maxSurge is ignored when StatefulSet exists but has no replicas", &testCase{
+			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
+				return wrappers.BuildLeaderWorkerSet(nsName).MaxSurge(2)
+			},
+			updates: []*update{
+				{
+					lwsUpdateFn: func(lws *leaderworkerset.LeaderWorkerSet) {
+						// Manually create a StatefulSet with 0 replicas to simulate the "true first creation" scenario
+						// This simulates Case 1b in the controller logic
+						var leaderSts appsv1.StatefulSet
+						testing.GetLeaderStatefulset(ctx, lws, k8sClient, &leaderSts)
+
+						// Update the StatefulSet to have 0 replicas
+						gomega.Eventually(func() error {
+							var sts appsv1.StatefulSet
+							if err := k8sClient.Get(ctx, types.NamespacedName{Name: leaderSts.Name, Namespace: leaderSts.Namespace}, &sts); err != nil {
+								return err
+							}
+							sts.Spec.Replicas = ptr.To[int32](0)
+							return k8sClient.Update(ctx, &sts)
+						}, testing.Timeout, testing.Interval).Should(gomega.Succeed())
+
+						// Also ensure Status.Replicas and Status.ReadyReplicas are 0
+						gomega.Eventually(func() error {
+							var sts appsv1.StatefulSet
+							if err := k8sClient.Get(ctx, types.NamespacedName{Name: leaderSts.Name, Namespace: leaderSts.Namespace}, &sts); err != nil {
+								return err
+							}
+							sts.Status.Replicas = 0
+							sts.Status.ReadyReplicas = 0
+							return k8sClient.Status().Update(ctx, &sts)
+						}, testing.Timeout, testing.Interval).Should(gomega.Succeed())
+
+						// Update LWS replicas to trigger reconciliation
+						testing.UpdateReplicaCount(ctx, k8sClient, lws, int32(3))
+					},
+					checkLWSState: func(lws *leaderworkerset.LeaderWorkerSet) {
+						// Even with maxSurge=2, it should create exactly 3 replicas since it's a first creation
+						testing.ExpectValidLeaderStatefulSet(ctx, k8sClient, lws, 3)
+						testing.ExpectValidWorkerStatefulSets(ctx, lws, k8sClient, true)
+					},
+				},
+			},
+		}),
 		ginkgo.Entry("rolling update with replicas scaled down and maxSurge set", &testCase{
 			makeLeaderWorkerSet: func(nsName string) *wrappers.LeaderWorkerSetWrapper {
 				return wrappers.BuildLeaderWorkerSet(nsName).Replica(6).MaxSurge(2)
