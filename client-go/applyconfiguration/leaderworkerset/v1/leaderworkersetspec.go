@@ -29,6 +29,7 @@ type LeaderWorkerSetSpecApplyConfiguration struct {
 	RolloutStrategy      *RolloutStrategyApplyConfiguration      `json:"rolloutStrategy,omitempty"`
 	StartupPolicy        *leaderworkersetv1.StartupPolicyType    `json:"startupPolicy,omitempty"`
 	NetworkConfig        *NetworkConfigApplyConfiguration        `json:"networkConfig,omitempty"`
+	NetworkTopology      *NetworkTopologyApplyConfiguration      `json:"networkTopology,omitempty"`
 }
 
 // LeaderWorkerSetSpecApplyConfiguration constructs a declarative configuration of the LeaderWorkerSetSpec type for use with
@@ -74,5 +75,13 @@ func (b *LeaderWorkerSetSpecApplyConfiguration) WithStartupPolicy(value leaderwo
 // If called multiple times, the NetworkConfig field is set to the value of the last call.
 func (b *LeaderWorkerSetSpecApplyConfiguration) WithNetworkConfig(value *NetworkConfigApplyConfiguration) *LeaderWorkerSetSpecApplyConfiguration {
 	b.NetworkConfig = value
+	return b
+}
+
+// WithNetworkTopology sets the NetworkTopology field in the declarative configuration to the given value
+// and returns the receiver, so that objects can be built by chaining "With" function invocations.
+// If called multiple times, the NetworkTopology field is set to the value of the last call.
+func (b *LeaderWorkerSetSpecApplyConfiguration) WithNetworkTopology(value *NetworkTopologyApplyConfiguration) *LeaderWorkerSetSpecApplyConfiguration {
+	b.NetworkTopology = value
 	return b
 }
