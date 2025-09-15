@@ -188,6 +188,26 @@ func (r *LeaderWorkerSetWebhook) generalValidate(obj runtime.Object) field.Error
 		}
 	}
 
+	// Validate NetworkTopology field
+	if lws.Spec.NetworkTopology != nil {
+		networkTopologyPath := specPath.Child("networkTopology")
+
+		// Validate mode field
+		if lws.Spec.NetworkTopology.Mode != "" && lws.Spec.NetworkTopology.Mode != "hard" && lws.Spec.NetworkTopology.Mode != "soft" {
+			allErrs = append(allErrs, field.Invalid(networkTopologyPath.Child("mode"), lws.Spec.NetworkTopology.Mode, "mode must be either 'hard' or 'soft'"))
+		}
+
+		// Validate highestTierAllowed field
+		if lws.Spec.NetworkTopology.HighestTierAllowed < 0 {
+			allErrs = append(allErrs, field.Invalid(networkTopologyPath.Child("highestTierAllowed"), lws.Spec.NetworkTopology.HighestTierAllowed, "highestTierAllowed must be non-negative"))
+		}
+
+		// Warn if highestTierAllowed is 0 (which means no cross-topology scheduling)
+		if lws.Spec.NetworkTopology.HighestTierAllowed == 0 {
+			allErrs = append(allErrs, field.Invalid(networkTopologyPath.Child("highestTierAllowed"), lws.Spec.NetworkTopology.HighestTierAllowed, "highestTierAllowed of 0 means all pods must be on the same node, consider using a value >= 1"))
+		}
+	}
+
 	return allErrs
 }
 

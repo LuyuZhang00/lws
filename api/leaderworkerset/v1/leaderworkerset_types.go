@@ -93,6 +93,11 @@ const (
 	SubdomainPolicyAnnotationKey string = "leaderworkerset.sigs.k8s.io/subdomainPolicy"
 )
 
+type NetworkTopology struct {
+    Mode             string `json:"mode"` // 支持"hard"（强制）/ "soft"（偏好）
+    HighestTierAllowed int  `json:"highestTierAllowed"` // 最高拓扑层级，如2表示支持两级拓扑
+}
+
 // One group consists of a single leader and M workers, and the total number of pods in a group is M+1.
 // LeaderWorkerSet will create N replicas of leader-worker pod groups (hereinafter referred to as group).
 //
@@ -133,6 +138,8 @@ type LeaderWorkerSetSpec struct {
 	// NetworkConfig defines the network configuration of the group
 	// +optional
 	NetworkConfig *NetworkConfig `json:"networkConfig,omitempty"`
+
+	NetworkTopology *NetworkTopology `json:"networkTopology,omitempty"`
 }
 
 // Template of the leader/worker pods, the group will include at least one leader pod.

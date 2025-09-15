@@ -83,6 +83,32 @@ func (v *VolcanoProvider) CreatePodGroupIfNotExists(ctx context.Context, lws *le
 			pg.Spec.Queue = queueName
 		}
 
+		// Configure NetworkTopology if specified in LWS spec
+		if lws.Spec.NetworkTopology != nil {
+			pg.Spec.NetworkTopology = &volcanov1beta1.NetworkTopologySpec{}
+
+			// Map mode from LWS to Volcano NetworkTopologyMode
+			switch lws.Spec.NetworkTopology.Mode {
+			case "hard":
+				pg.Spec.NetworkTopology.Mode = volcanov1beta1.HardNetworkTopologyMode
+			case "soft":
+				pg.Spec.NetworkTopology.Mode = volcanov1beta1.SoftNetworkTopologyMode
+			default:
+				// Default to hard mode if not specified or invalid
+				pg.Spec.NetworkTopology.Mode = volcanov1beta1.HardNetworkTopologyMode
+			}
+
+			// Set HighestTierAllowed
+			if lws.Spec.NetworkTopology.HighestTierAllowed > 0 {
+				highestTier := lws.Spec.NetworkTopology.HighestTierAllowed
+				pg.Spec.NetworkTopology.HighestTierAllowed = &highestTier
+			}
+
+			log.V(2).Info("Configured NetworkTopology for PodGroup",
+				"mode", pg.Spec.NetworkTopology.Mode,
+				"highestTierAllowed", pg.Spec.NetworkTopology.HighestTierAllowed)
+		}
+
 		err = ctrl.SetControllerReference(leaderPod, &pg, v.client.Scheme())
 		if err != nil {
 			return err

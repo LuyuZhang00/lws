@@ -17152,6 +17152,16 @@ spec:
                 required:
                 - subdomainPolicy
                 type: object
+              networkTopology:
+                properties:
+                  highestTierAllowed:
+                    type: integer
+                  mode:
+                    type: string
+                required:
+                - highestTierAllowed
+                - mode
+                type: object
               replicas:
                 default: 1
                 description: |-

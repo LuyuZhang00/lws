@@ -1,0 +1,66 @@
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: lws-topology-example
+  annotations:
+    # 如果需要指定 Volcano 队列
+    # volcano.sh/queue-name: "default"
+spec:
+  replicas: 2
+  leaderWorkerTemplate:
+    size: 4  # 每个组有 1 个 leader + 3 个 worker
+    leaderTemplate:
+      spec:
+        containers:
+        - name: leader
+          image: nginx:latest
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+    workerTemplate:
+      spec:
+        containers:
+        - name: worker
+          image: nginx:latest
+          resources:
+            requests:
+              cpu: "1"
+              memory: "1Gi"
+            limits:
+              cpu: "2"
+              memory: "2Gi"
+  # 网络拓扑配置
+  networkTopology:
+    mode: "hard"            # 强制亲和性模式，必须满足拓扑约束才能调度
+    highestTierAllowed: 2   # 允许的最高拓扑层级为 2（支持两级拓扑调度）
+                           # 例如：racks -> nodes 或 zones -> racks
+                           # 值为 1 表示所有 Pod 必须在同一拓扑域（如同一机架）
+                           # 值为 2 表示允许跨越一级拓扑域（如跨机架但在同一区域）
+---
+# 示例：使用 soft 模式的配置
+apiVersion: leaderworkerset.x-k8s.io/v1
+kind: LeaderWorkerSet
+metadata:
+  name: lws-topology-soft-example
+spec:
+  replicas: 1
+  leaderWorkerTemplate:
+    size: 8  # 每个组有 1 个 leader + 7 个 worker
+    workerTemplate:
+      spec:
+        containers:
+        - name: worker
+          image: busybox:latest
+          command: ["sleep", "3600"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+  # 网络拓扑配置 - soft 模式
+  networkTopology:
+    mode: "soft"            # 偏好模式，尽可能满足拓扑约束，但不强制
+    highestTierAllowed: 1   # 尽可能将所有 Pod 调度到同一拓扑域
