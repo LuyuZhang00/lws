@@ -48,8 +48,7 @@ echo ""
 echo "4. Deploying LWS controller..."
 # Build and load the controller image to kind
 echo "Building controller image..."
-make docker-build IMG=lws-controller:test
-kind load docker-image lws-controller:test
+make kind-image-build
 
 # Deploy controller
 kubectl apply -f - <<EOF
@@ -76,7 +75,7 @@ spec:
       serviceAccountName: lws-controller
       containers:
       - name: controller
-        image: lws-controller:test
+        image: ko.local/sigs.k8s.io/lws/cmd:latest
         imagePullPolicy: IfNotPresent
         command:
         - /manager
