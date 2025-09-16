@@ -3,36 +3,46 @@ kind: LeaderWorkerSet
 metadata:
   name: lws-topology-example
   annotations:
-    # 如果需要指定 Volcano 队列
-    # volcano.sh/queue-name: "default"
+    # 启用 Volcano gang scheduling
+    scheduling.volcano.sh/queue-name: "default"
 spec:
   replicas: 2
+  # 启用 gang scheduling 的启动策略
+  # LeaderCreated: 所有 Pod 必须一起调度（真正的 gang scheduling）
+  # LeaderReady: Leader 可以先调度，但会预留所有 Pod 的资源
+  startupPolicy: LeaderCreated
   leaderWorkerTemplate:
     size: 4  # 每个组有 1 个 leader + 3 个 worker
     leaderTemplate:
       spec:
+        # 使用 Volcano 调度器
+        schedulerName: volcano
         containers:
         - name: leader
-          image: nginx:latest
+          image: docker.1ms.run/library/alpine:3.22.1
+          command: ["sleep", "infinity"]  # 保持容器运行
           resources:
             requests:
-              cpu: "1"
-              memory: "1Gi"
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              cpu: "2"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "256Mi"
     workerTemplate:
       spec:
+        # 使用 Volcano 调度器
+        schedulerName: volcano
         containers:
         - name: worker
-          image: nginx:latest
+          image: docker.1ms.run/library/alpine:3.22.1
+          command: ["sleep", "infinity"]  # 保持容器运行
           resources:
             requests:
-              cpu: "1"
-              memory: "1Gi"
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              cpu: "2"
-              memory: "2Gi"
+              cpu: "200m"
+              memory: "256Mi"
   # 网络拓扑配置
   networkTopology:
     mode: "hard"            # 强制亲和性模式，必须满足拓扑约束才能调度
@@ -41,25 +51,44 @@ spec:
                            # 值为 1 表示所有 Pod 必须在同一拓扑域（如同一机架）
                            # 值为 2 表示允许跨越一级拓扑域（如跨机架但在同一区域）
 ---
-# 示例：使用 soft 模式的配置
+# 示例：使用 soft 模式 + gang scheduling 的配置
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
   name: lws-topology-soft-example
+  annotations:
+    # 启用 Volcano gang scheduling
+    scheduling.volcano.sh/queue-name: "default"
 spec:
   replicas: 1
+  # 使用 LeaderReady 策略，允许 Leader 先调度但预留资源
+  startupPolicy: LeaderReady
   leaderWorkerTemplate:
     size: 8  # 每个组有 1 个 leader + 7 个 worker
-    workerTemplate:
+    leaderTemplate:
       spec:
+        # 使用 Volcano 调度器
+        schedulerName: volcano
         containers:
-        - name: worker
-          image: busybox:latest
+        - name: leader
+          image: docker.1ms.run/library/alpine:3.22.1
           command: ["sleep", "3600"]
           resources:
             requests:
-              cpu: "100m"
-              memory: "128Mi"
+              cpu: "50m"
+              memory: "64Mi"
+    workerTemplate:
+      spec:
+        # 使用 Volcano 调度器
+        schedulerName: volcano
+        containers:
+        - name: worker
+          image: docker.1ms.run/library/alpine:3.22.1
+          command: ["sleep", "3600"]
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
   # 网络拓扑配置 - soft 模式
   networkTopology:
     mode: "soft"            # 偏好模式，尽可能满足拓扑约束，但不强制

@@ -93,9 +93,22 @@ const (
 	SubdomainPolicyAnnotationKey string = "leaderworkerset.sigs.k8s.io/subdomainPolicy"
 )
 
+// NetworkTopology defines the network topology configuration for pod scheduling.
+// It allows specifying topology constraints for pod placement within a LeaderWorkerSet.
 type NetworkTopology struct {
-    Mode             string `json:"mode"` // 支持"hard"（强制）/ "soft"（偏好）
-    HighestTierAllowed int  `json:"highestTierAllowed"` // 最高拓扑层级，如2表示支持两级拓扑
+	// Mode defines the scheduling mode for network topology.
+	// Supported values are "hard" (must satisfy topology constraints) and "soft" (best effort).
+	// +kubebuilder:validation:Enum=hard;soft
+	// +kubebuilder:default=hard
+	// +optional
+	Mode string `json:"mode,omitempty"`
+
+	// HighestTierAllowed defines the highest topology tier that pods can be spread across.
+	// For example, 1 means all pods must be in the same topology domain (e.g., same rack),
+	// 2 means pods can spread across one tier (e.g., across racks but within same zone).
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	HighestTierAllowed int `json:"highestTierAllowed,omitempty"`
 }
 
 // One group consists of a single leader and M workers, and the total number of pods in a group is M+1.
@@ -139,6 +152,8 @@ type LeaderWorkerSetSpec struct {
 	// +optional
 	NetworkConfig *NetworkConfig `json:"networkConfig,omitempty"`
 
+	// NetworkTopology defines the network topology configuration for scheduling
+	// +optional
 	NetworkTopology *NetworkTopology `json:"networkTopology,omitempty"`
 }
 
